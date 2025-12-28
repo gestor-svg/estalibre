@@ -15,15 +15,15 @@ app = Flask(__name__)
 API_KEY = os.environ.get("API_KEY_GEMINI")
 genai.configure(api_key=API_KEY)
 
-# Usamos la llamada al modelo sin especificar versiones de API v1beta
+# Inicialización simplificada para evitar errores de versión 404
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def analizar_con_gemini(marca, descripcion):
-    prompt = f"Analiza Marca: {marca} y Giro: {descripcion} para registro en México. Responde SOLO un JSON con: viabilidad (0-100), clases (lista de strings), nota (string)."
+    prompt = f"Analiza la marca '{marca}' para el giro '{descripcion}' en México. Responde únicamente en formato JSON con estas llaves: viabilidad (número 0-100), clases (lista de textos), nota (texto breve)."
     try:
         response = model.generate_content(prompt)
-        # Limpieza de JSON por si Gemini añade texto extra o markdown
         clean_text = response.text.strip()
+        # Limpieza de markdown en caso de que Gemini lo incluya
         if "```json" in clean_text:
             clean_text = clean_text.split("```json")[1].split("```")[0]
         elif "```" in clean_text:
@@ -32,17 +32,16 @@ def analizar_con_gemini(marca, descripcion):
         return json.loads(clean_text)
     except Exception as e:
         print(f"Error en Gemini: {e}")
-        # Respuesta de respaldo si falla la IA
-        return {"viabilidad": 50, "clases": ["Clase 35: Servicios comerciales"], "nota": "Análisis preliminar."}
+        return {"viabilidad": 50, "clases": ["Clase 35: Servicios comerciales"], "nota": "IA en mantenimiento, análisis básico disponible."}
 
-# --- CONFIGURACIÓN DEL ROBOT (SELENIUM) ---
+# --- CONFIGURACIÓN DEL ROBOT ---
 def buscar_en_marcanet(marca):
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    # Identidad humana para evitar bloqueos del IMPI
+    # User-Agent para simular un navegador real
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     chrome_options.binary_location = "/usr/bin/google-chrome"
@@ -58,13 +57,15 @@ def buscar_en_marcanet(marca):
         wait = WebDriverWait(driver, 15)
         input_busqueda = wait.until(EC.presence_of_element_located((By.NAME, "denominacion")))
         
+        # Simulación de escritura
         input_busqueda.send_keys(marca)
         
         btn_buscar = driver.find_element(By.ID, "btnBuscar")
-        # Click por Script para mayor efectividad en modo invisible
+        # Usamos JavaScript para el clic, es más efectivo en modo invisible
         driver.execute_script("arguments[0].click();", btn_buscar)
         
-        time.sleep(4)
+        # Tiempo de espera para que el IMPI procese
+        time.sleep(5)
         
         if "No se encontraron registros" in driver.page_source:
             return "DISPONIBLE"
@@ -78,6 +79,7 @@ def buscar_en_marcanet(marca):
         if driver:
             driver.quit()
 
+# --- RUTAS ---
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -88,12 +90,13 @@ def consultar():
     marca = data.get('marca', '')
     desc = data.get('descripcion', '')
     
+    # Ejecutar ambos procesos
     resultado = analizar_con_gemini(marca, desc)
     dispo = buscar_en_marcanet(marca)
     
     if dispo == "OCUPADA":
         resultado['viabilidad'] = 10
-        resultado['nota'] = "¡ALERTA! Se encontraron registros idénticos en el IMPI."
+        resultado['nota'] = "¡RIESGO ALTO! Se detectaron marcas idénticas en el IMPI."
     
     return jsonify(resultado)
 
