@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESTALIBRE - Buscador Inteligente de Marcas</title>
+    <style>
+        :root { --primario: #007bff; --verde: #28a745; --rojo: #ff4d4d; --amarillo: #ffcc00; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 600px; margin: auto; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; }
+        
+        /* Formulario */
+        input, textarea { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 8px; font-size: 16px; }
+        button { background: var(--primario); color: white; border: none; padding: 15px 30px; border-radius: 30px; font-weight: bold; cursor: pointer; font-size: 16px; transition: 0.3s; }
+        button:hover { transform: scale(1.03); background: #0056b3; }
+
+        /* Confidencialidad */
+        .confidentiality-notice { margin-top: 15px; font-size: 0.85rem; color: #666; display: flex; align-items: center; justify-content: center; gap: 5px; }
+
+        /* Velocímetro */
+        .gauge-section { margin: 30px 0; display: none; }
+        .gauge { position: relative; width: 200px; height: 100px; margin: 0 auto; overflow: hidden; }
+        .gauge__body { width: 100%; height: 200%; background: #eee; position: absolute; border-radius: 50%; }
+        .gauge__fill { position: absolute; top: 100%; left: 0; width: 100%; height: 100%; background: var(--rojo); transform-origin: center top; transition: transform 1.5s ease-out; }
+        .gauge__cover { width: 75%; height: 75%; background: white; border-radius: 50%; position: absolute; top: 25%; left: 12.5%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 24px; padding-bottom: 15%; box-sizing: border-box; }
+        
+        /* Resultados */
+        .niza-box { background: #f8f9fa; padding: 15px; border-radius: 10px; text-align: left; margin: 20px 0; display: none; }
+        .btn-wa { background: #25d366; margin-top: 10px; width: 100%; }
+        .btn-pay { background: var(--verde); margin-top: 10px; width: 100%; }
+        footer { margin-top: 40px; font-size: 12px; color: #999; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>ESTA<span style="color:var(--primario)">LIBRE</span></h1>
+    
+    <div id="busqueda-form">
+        <input type="text" id="nombreMarca" placeholder="Nombre de la marca (ej: MarcaSegura)">
+        <textarea id="descripcionGiro" placeholder="¿Qué vas a vender? (ej: Café y pan dulce)"></textarea>
+        <button onclick="realizarConsulta()">Consultar Disponibilidad</button>
+        
+        <div class="confidentiality-notice">
+            🔒 <span>Tus búsquedas son privadas y están encriptadas.</span>
+        </div>
+    </div>
+
+    <div id="resultados-seccion" class="gauge-section">
+        <div class="gauge">
+            <div class="gauge__body">
+                <div class="gauge__fill" id="gauge-fill"></div>
+                <div class="gauge__cover" id="gauge-texto">0%</div>
+            </div>
+        </div>
+        <h3 id="status-text">Analizando...</h3>
+
+        <div id="niza-sugerencias" class="niza-box">
+            <p><strong>Clases Sugeridas:</strong></p>
+            <ul id="lista-clases"></ul>
+        </div>
+
+        <button class="btn-wa" onclick="abrirWhatsApp()">Hablar con un Ejecutivo</button>
+        <button class="btn-pay" onclick="window.location.href='https://mpago.la/TU_LINK'">Obtener Reporte PDF ($499)</button>
+    </div>
+</div>
+
+<footer>
+    <a href="#">Aviso de Privacidad</a> | <a href="#">Términos y Condiciones</a>
+</footer>
+
+<script>
+    let viabilidadGlobal = 0;
+
+    async function realizarConsulta() {
+        const marca = document.getElementById('nombreMarca').value;
+        const desc = document.getElementById('descripcionGiro').value;
+        if(!marca || !desc) return alert("Por favor llena ambos campos");
+
+        // Mostrar sección de resultados
+        document.getElementById('busqueda-form').style.display = 'none';
+        document.getElementById('resultados-seccion').style.display = 'block';
+
+        const response = await fetch('/consultar', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({marca: marca, descripcion: desc})
+        });
+        
+        const data = await response.json();
+        actualizarVelocimetro(data.viabilidad);
+        mostrarClases(data.clases);
+        viabilidadGlobal = data.viabilidad;
+    }
+
+    function actualizarVelocimetro(valor) {
+        const fill = document.getElementById('gauge-fill');
+        const texto = document.getElementById('gauge-texto');
+        const status = document.getElementById('status-text');
+        
+        const rotation = valor / 200; // 0.5 es el máximo (180 grados)
+        fill.style.transform = `rotate(${rotation}turn)`;
+        texto.innerText = valor + "%";
+
+        if(valor > 80) { fill.style.background = '#28a745'; status.innerText = "¡Viabilidad Alta!"; }
+        else if(valor > 50) { fill.style.background = '#ffcc00'; status.innerText = "Viabilidad Media"; }
+        else { fill.style.background = '#ff4d4d'; status.innerText = "Riesgo Detectado"; }
+    }
+
+    function mostrarClases(clases) {
+        const lista = document.getElementById('lista-clases');
+        const box = document.getElementById('niza-sugerencias');
+        lista.innerHTML = "";
+        clases.forEach(c => {
+            const li = document.createElement('li');
+            li.innerText = (typeof c === 'string') ? c : `${c.clase}: ${c.razon}`;
+            lista.appendChild(li);
+        });
+        box.style.display = 'block';
+    }
+
+    function abrirWhatsApp() {
+        const marca = document.getElementById('nombreMarca').value;
+        const msg = encodeURIComponent(`Hola, consulté la marca ${marca} en ESTALIBRE con ${viabilidadGlobal}% de éxito. Quiero asesoría.`);
+        window.open(`https://wa.me/5215500000000?text=${msg}`, '_blank');
+    }
+</script>
+
+</body>
+</html>
