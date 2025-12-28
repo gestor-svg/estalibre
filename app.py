@@ -14,7 +14,6 @@ import google.generativeai as genai
 app = Flask(__name__)
 
 # --- CONFIGURACIÓN DE GEMINI ---
-# Obtiene la API KEY desde las variables de entorno de Render
 API_KEY = os.environ.get("API_KEY_GEMINI")
 genai.configure(api_key=API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
@@ -26,82 +25,76 @@ def analizar_con_gemini(marca, descripcion):
     Marca: {marca}
     Giro del negocio: {descripcion}
     
-    TAREAS:
-    1. Sugiere las 2 o 3 Clases de Niza más probables.
-    2. Evalúa la viabilidad de registro (0-100) considerando si el nombre es genérico o descriptivo.
-    3. Dame una breve nota técnica para el ejecutivo legal.
-    
-    Responde estrictamente en formato JSON con esta estructura:
+    Responde estrictamente en formato JSON:
     {{
       "viabilidad": 85,
-      "clases": ["Clase X: razón breve", "Clase Y: razón breve"],
-      "nota": "Tu comentario técnico aquí"
+      "clases": ["Clase X: razón"],
+      "nota": "Tu comentario técnico"
     }}
     """
     try:
         response = model.generate_content(prompt)
-        # Limpiamos la respuesta para obtener solo el JSON
         text_response = response.text.strip().replace('```json', '').replace('```', '')
         return json.loads(text_response)
     except Exception as e:
         print(f"Error en Gemini: {e}")
-        return {
-            "viabilidad": 50, 
-            "clases": ["Error al obtener clases"], 
-            "nota": "No se pudo conectar con el motor de IA."
-        }
+        return {"viabilidad": 50, "clases": ["Error de IA"], "nota": "No se pudo conectar con la IA."}
 
-# --- CONFIGURACIÓN DEL ROBOT (SELENIUM PARA DOCKER) ---
+# --- CONFIGURACIÓN DEL ROBOT (SELENIUM OPTIMIZADO PARA RENDER) ---
 def buscar_en_marcanet(marca):
-    """Abre un navegador invisible y consulta disponibilidad en IMPI"""
+    """Consulta disponibilidad en IMPI con configuración de alto rendimiento"""
     chrome_options = Options()
-    chrome_options.add_argument("--headless")  # Modo invisible
-    chrome_options.add_argument("--no-sandbox") # Necesario para contenedores
-    chrome_options.add_argument("--disable-dev-shm-usage") # Evita falta de memoria
+    # Modo headless moderno y ultra-ligero
+    chrome_options.add_argument("--headless=new") 
+    chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     
-    # RUTA CRÍTICA PARA DOCKER: Donde se instala Chrome en la imagen de Linux
+    # Optimizaciones de red y carga
+    chrome_options.add_argument("--proxy-server='direct://'")
+    chrome_options.add_argument("--proxy-bypass-list=*")
+    # Desactivar carga de imágenes para ahorrar RAM y tiempo
+    chrome_options.add_experimental_option("prefs", {"profile.managed_default_content_settings.images": 2})
+    
     chrome_options.binary_location = "/usr/bin/google-chrome"
     
     driver = None
     try:
-        # En Selenium 4 con Docker, no necesitamos descargar el driver manualmente
-        # si Chrome está instalado en el sistema.
         driver = webdriver.Chrome(options=chrome_options)
+        # Limitar el tiempo de espera de carga de página a 25 segundos
+        driver.set_page_load_timeout(25)
         
         url = "https://acervomarcas.impi.gob.mx:8181/marcanet/vistas/common/datos/bsqDenominacionCompleto.pgi"
         driver.get(url)
         
-        # Espera a que el campo de búsqueda aparezca
-        input_busqueda = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.NAME, "denominacion"))
-        )
+        # Espera máxima de 10 segundos para encontrar el input
+        wait = WebDriverWait(driver, 10)
+        input_busqueda = wait.until(EC.presence_of_element_located((By.NAME, "denominacion")))
         
-        # Simular escritura humana
-        for letra in marca:
-            input_busqueda.send_keys(letra)
-            time.sleep(random.uniform(0.1, 0.2))
-            
+        # Envío rápido del texto
+        input_busqueda.send_keys(marca)
+        
         btn_buscar = driver.find_element(By.ID, "btnBuscar")
         btn_buscar.click()
         
-        # Esperar a que la página cargue los resultados
-        time.sleep(random.uniform(4, 6))
+        # Tiempo de espera optimizado para resultados (3 segundos es suficiente sin imágenes)
+        time.sleep(3)
         
-        # Verificar si aparece el mensaje de "No se encontraron registros"
-        if "No se encontraron registros" in driver.page_source:
+        # Búsqueda rápida en el código fuente
+        page_source = driver.page_source
+        if "No se encontraron registros" in page_source:
             return "DISPONIBLE"
         else:
             return "OCUPADA"
             
     except Exception as e:
-        print(f"Error en el robot Selenium: {e}")
+        print(f"Error en el robot: {e}")
         return "ERROR_CONEXION"
     finally:
         if driver:
             driver.quit()
 
-# --- RUTAS DE LA APLICACIÓN WEB ---
+# --- RUTAS ---
 
 @app.route('/')
 def home():
@@ -114,24 +107,24 @@ def consultar():
     descripcion = data.get('descripcion')
 
     if not marca or not descripcion:
-        return jsonify({"error": "Faltan datos"}), 400
+        return jsonify({"error": "Datos incompletos"}), 400
 
-    # 1. Obtener análisis de inteligencia de Gemini
+    # Ejecución de Gemini
     resultado_final = analizar_con_gemini(marca, descripcion)
     
-    # 2. Consultar disponibilidad real en IMPI con el robot
+    # Ejecución del Robot
     disponibilidad = buscar_en_marcanet(marca)
     
-    # 3. Ajustar lógica de viabilidad según la búsqueda real
+    # Lógica de negocio combinada
     if disponibilidad == "OCUPADA":
-        resultado_final['viabilidad'] = random.randint(0, 10)
-        resultado_final['nota'] = "¡ALERTA! Se encontraron registros idénticos en el IMPI. El riesgo de rechazo es muy alto."
+        resultado_final['viabilidad'] = 5
+        resultado_final['nota'] = "¡ALERTA! El robot detectó registros idénticos en el IMPI. Registro no recomendado."
     elif disponibilidad == "ERROR_CONEXION":
-        resultado_final['nota'] = "Nota: El IMPI no respondió a la consulta técnica, pero aquí está el análisis de la IA."
+        resultado_final['nota'] += " (El robot técnico falló, pero el análisis de IA fue exitoso)."
 
     return jsonify(resultado_final)
 
 if __name__ == '__main__':
-    # Render usa el puerto 10000 por defecto para servicios Docker
+    # Puerto dinámico para Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
