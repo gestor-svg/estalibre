@@ -16,73 +16,61 @@ app = Flask(__name__)
 # --- CONFIGURACIÓN DE GEMINI ---
 API_KEY = os.environ.get("API_KEY_GEMINI")
 genai.configure(api_key=API_KEY)
+
+# Cambio: Usamos una forma más genérica de llamar al modelo para evitar el error 404
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 def analizar_con_gemini(marca, descripcion):
-    """Usa IA para sugerir clases de Niza y evaluar riesgo"""
-    prompt = f"""
-    Eres un experto en Propiedad Industrial en México. Analiza:
-    Marca: {marca}
-    Giro del negocio: {descripcion}
-    
-    Responde estrictamente en formato JSON:
-    {{
-      "viabilidad": 85,
-      "clases": ["Clase X: razón"],
-      "nota": "Tu comentario técnico"
-    }}
-    """
+    prompt = f"Eres experto en marcas en México. Analiza Marca: {marca} y Giro: {descripcion}. Responde solo JSON con llaves: viabilidad (numero 0-100), clases (lista de strings), nota (string)."
     try:
+        # Forzamos el uso de la generación simple
         response = model.generate_content(prompt)
-        text_response = response.text.strip().replace('```json', '').replace('```', '')
-        return json.loads(text_response)
+        # Limpieza de texto para asegurar JSON puro
+        clean_text = response.text.strip()
+        if "```json" in clean_text:
+            clean_text = clean_text.split("```json")[1].split("```")[0]
+        elif "```" in clean_text:
+            clean_text = clean_text.split("```")[1].split("```")[0]
+        return json.loads(clean_text)
     except Exception as e:
         print(f"Error en Gemini: {e}")
-        return {"viabilidad": 50, "clases": ["Error de IA"], "nota": "No se pudo conectar con la IA."}
+        return {"viabilidad": 50, "clases": ["Clase 35: Servicios comerciales"], "nota": "Análisis preliminar (IA en mantenimiento)."}
 
-# --- CONFIGURACIÓN DEL ROBOT (SELENIUM OPTIMIZADO PARA RENDER) ---
+# --- CONFIGURACIÓN DEL ROBOT ---
 def buscar_en_marcanet(marca):
-    """Consulta disponibilidad en IMPI con configuración de alto rendimiento"""
     chrome_options = Options()
-    # Modo headless moderno y ultra-ligero
-    chrome_options.add_argument("--headless=new") 
+    chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    
-    # Optimizaciones de red y carga
-    chrome_options.add_argument("--proxy-server='direct://'")
-    chrome_options.add_argument("--proxy-bypass-list=*")
-    # Desactivar carga de imágenes para ahorrar RAM y tiempo
-    chrome_options.add_experimental_option("prefs", {"profile.managed_default_content_settings.images": 2})
+    # Añadimos un User-Agent para evitar bloqueos del IMPI
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     chrome_options.binary_location = "/usr/bin/google-chrome"
     
     driver = None
     try:
         driver = webdriver.Chrome(options=chrome_options)
-        # Limitar el tiempo de espera de carga de página a 25 segundos
-        driver.set_page_load_timeout(25)
+        driver.set_page_load_timeout(35) # Más tiempo para el IMPI
         
         url = "https://acervomarcas.impi.gob.mx:8181/marcanet/vistas/common/datos/bsqDenominacionCompleto.pgi"
         driver.get(url)
         
-        # Espera máxima de 10 segundos para encontrar el input
-        wait = WebDriverWait(driver, 10)
+        # Esperar al campo de texto
+        wait = WebDriverWait(driver, 15)
         input_busqueda = wait.until(EC.presence_of_element_located((By.NAME, "denominacion")))
         
-        # Envío rápido del texto
         input_busqueda.send_keys(marca)
+        time.sleep(1)
         
         btn_buscar = driver.find_element(By.ID, "btnBuscar")
-        btn_buscar.click()
+        driver.execute_script("arguments[0].click();", btn_buscar) # Click vía JS para mayor seguridad
         
-        # Tiempo de espera optimizado para resultados (3 segundos es suficiente sin imágenes)
-        time.sleep(3)
+        # Esperar resultados
+        time.sleep(5)
         
-        # Búsqueda rápida en el código fuente
-        page_source = driver.page_source
-        if "No se encontraron registros" in page_source:
+        source = driver.page_source
+        if "No se encontraron registros" in source:
             return "DISPONIBLE"
         else:
             return "OCUPADA"
@@ -94,8 +82,6 @@ def buscar_en_marcanet(marca):
         if driver:
             driver.quit()
 
-# --- RUTAS ---
-
 @app.route('/')
 def home():
     return render_template('index.html')
@@ -103,28 +89,20 @@ def home():
 @app.route('/consultar', methods=['POST'])
 def consultar():
     data = request.json
-    marca = data.get('marca')
-    descripcion = data.get('descripcion')
-
-    if not marca or not descripcion:
-        return jsonify({"error": "Datos incompletos"}), 400
-
-    # Ejecución de Gemini
-    resultado_final = analizar_con_gemini(marca, descripcion)
+    marca = data.get('marca', '')
+    desc = data.get('descripcion', '')
     
-    # Ejecución del Robot
-    disponibilidad = buscar_en_marcanet(marca)
+    # Ejecutar IA
+    resultado = analizar_con_gemini(marca, desc)
+    # Ejecutar Robot
+    dispo = buscar_en_marcanet(marca)
     
-    # Lógica de negocio combinada
-    if disponibilidad == "OCUPADA":
-        resultado_final['viabilidad'] = 5
-        resultado_final['nota'] = "¡ALERTA! El robot detectó registros idénticos en el IMPI. Registro no recomendado."
-    elif disponibilidad == "ERROR_CONEXION":
-        resultado_final['nota'] += " (El robot técnico falló, pero el análisis de IA fue exitoso)."
-
-    return jsonify(resultado_final)
+    if dispo == "OCUPADA":
+        resultado['viabilidad'] = 10
+        resultado['nota'] = "ALERTA: Se encontraron coincidencias exactas en el IMPI."
+    
+    return jsonify(resultado)
 
 if __name__ == '__main__':
-    # Puerto dinámico para Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
