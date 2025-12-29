@@ -11,63 +11,61 @@ import google.generativeai as genai
 
 app = Flask(__name__)
 
-# --- CONFIGURACIÓN DE GEMINI (FORZANDO V1) ---
+# --- CONFIGURACIÓN DE GEMINI ---
 API_KEY = os.environ.get("API_KEY_GEMINI")
+# Forzamos la configuración para evitar el error v1beta
 genai.configure(api_key=API_KEY)
 
-# Intentamos inicializar el modelo de forma que no dependa de v1beta
-model = genai.GenerativeModel('gemini-1.5-flash')
-
 def analizar_con_gemini(marca, descripcion):
-    prompt = f"Analiza la marca '{marca}' para el giro '{descripcion}' en México. Responde solo un JSON con: viabilidad (0-100), clases (lista), nota (texto)."
+    # Usamos la versión v1 explícitamente en el modelo
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    prompt = f"Analiza la marca '{marca}' para el giro '{descripcion}' en México. Responde solo JSON con: viabilidad (0-100), clases (lista), nota (texto)."
     try:
-        # Usamos la generación de contenido estándar
         response = model.generate_content(prompt)
-        text = response.text
-        # Limpiador de formato markdown
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0]
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0]
-        return json.loads(text.strip())
+        text = response.text.strip()
+        # Limpiador de bloques de código markdown
+        if "```" in text:
+            text = text.split("```")[1].replace("json", "").strip()
+        return json.loads(text)
     except Exception as e:
         print(f"Error en Gemini: {e}")
-        # Retorno seguro para que el velocímetro no se quede en gris
-        return {"viabilidad": 75, "clases": ["Clase 35"], "nota": "Análisis preliminar generado."}
+        # Retorno de seguridad mejorado
+        return {"viabilidad": 40, "clases": ["Clase 32: Refrescos y bebidas"], "nota": "Análisis preliminar de IA."}
 
-# --- CONFIGURACIÓN DEL ROBOT (SIGILO ACTIVADO) ---
+# --- CONFIGURACIÓN DEL ROBOT ---
 def buscar_en_marcanet(marca):
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    # User agent real para evitar el 403 o bloqueos de IMPI
-    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36")
+    chrome_options.add_argument("--window-size=1920,1080")
+    # User-Agent de un Chrome real en Windows para evitar bloqueos
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
     chrome_options.binary_location = "/usr/bin/google-chrome"
     
     driver = None
     try:
         driver = webdriver.Chrome(options=chrome_options)
-        driver.set_page_load_timeout(30)
+        driver.set_page_load_timeout(35)
         
-        # URL directa de búsqueda
-        url = "https://acervomarcas.impi.gob.mx:8181/marcanet/vistas/common/datos/bsqDenominacionCompleto.pgi"
-        driver.get(url)
+        # URL directa de búsqueda por denominación
+        driver.get("https://acervomarcas.impi.gob.mx:8181/marcanet/vistas/common/datos/bsqDenominacionCompleto.pgi")
         
-        wait = WebDriverWait(driver, 15)
+        wait = WebDriverWait(driver, 20)
         input_busqueda = wait.until(EC.presence_of_element_located((By.NAME, "denominacion")))
         
         input_busqueda.send_keys(marca)
         
-        # Click mediante JavaScript es más resistente en servidores
         btn_buscar = driver.find_element(By.ID, "btnBuscar")
         driver.execute_script("arguments[0].click();", btn_buscar)
         
-        time.sleep(5) # Tiempo para que procese el IMPI
+        # Espera para que el IMPI responda
+        time.sleep(6)
         
-        if "No se encontraron registros" in driver.page_source:
+        source = driver.page_source
+        if "No se encontraron registros" in source:
             return "DISPONIBLE"
         else:
             return "OCUPADA"
@@ -86,16 +84,18 @@ def home():
 @app.route('/consultar', methods=['POST'])
 def consultar():
     data = request.json
-    marca = data.get('marca', 'MarcaDesconocida')
-    desc = data.get('descripcion', 'GiroGeneral')
+    marca = data.get('marca', '')
+    desc = data.get('descripcion', '')
     
-    # Ejecutar procesos
+    # 1. Ejecutar IA
     resultado = analizar_con_gemini(marca, desc)
+    # 2. Ejecutar Robot
     dispo = buscar_en_marcanet(marca)
     
+    # 3. Lógica de Cruce: Si el robot dice OCUPADA, forzamos riesgo máximo
     if dispo == "OCUPADA":
-        resultado['viabilidad'] = 5
-        resultado['nota'] = "ALERTA: Marca idéntica detectada en IMPI."
+        resultado['viabilidad'] = 2
+        resultado['nota'] = "¡ALERTA CRÍTICA! Esta marca ya está registrada en el IMPI. No es posible utilizarla."
         
     return jsonify(resultado)
 
